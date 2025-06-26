@@ -1,0 +1,21 @@
+version: "3.9"
+
+services:
+  rncs-api:
+    image: yolfryr/rncs:latest
+    container_name: rncs-api
+    ports:
+      - "9922:9922"
+    command: ["--foreground", "9922"]
+    restart: unless-stopped
+  cron-reload:
+    image: curlimages/curl:latest
+    container_name: rncs-cron-reload
+    depends_on:
+      - rncs-api
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "while true; do
+        curl -X POST http://rncs-api:9922/api/reload;
+        sleep 86400;
+      done"
