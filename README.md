@@ -90,8 +90,6 @@ services:
 docker compose up -d
 ```
 
-
-
 ## Autor
 
 Desarrollado por **Yolfry R.**  
@@ -100,3 +98,37 @@ Correo: yolfri1997@gmail.com
 ## Licencia
 
 MIT
+
+## Ejemplos de uso (API pública)
+
+Puedes probar la API pública desplegada en: [https://rnc.ypw.com.do/api](https://rnc.ypw.com.do/api)
+
+### Consultar un RNC
+
+```bash
+curl https://rnc.ypw.com.do/api/checkrnc/132138279
+```
+
+### Respuesta de ejemplo
+
+```json
+{
+  "rnc": "132138279",
+  "socialName": "BANCO POPULAR DOMINICANO, C. POR A.",
+  "comercialName": "BANCO POPULAR DOMINICANO, C. POR A.",
+  "status": "ACTIVO"
+}
+```
+
+```bash
+curl https://rnc.ypw.com.do/api/checkcedula/00113918236
+```
+
+```json
+{
+  "valid": true,
+  "cedula": "00113918236",
+  "nombre": "JUAN PEREZ",
+  "status": "ACTIVO"
+}
+```
