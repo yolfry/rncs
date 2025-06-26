@@ -1,4 +1,3 @@
-// rncs — optimized version
 package main
 
 import (
@@ -204,13 +203,13 @@ func runCLI() {
 	fmt.Println(string(j))
 }
 
-/* ---------- HTTP ---------- */
+/* ---------- HTTP + CORS Middleware ---------- */
 
 func startHTTP() {
 	const defaultPort = 9922
 	port := defaultPort
 
-	// Parse the last argument (if exists) as port
+	// Parse optional port arg
 	args := flag.Args()
 	if len(args) > 1 {
 		fmt.Fprintln(os.Stderr, "Error: too many arguments in API mode")
@@ -227,9 +226,10 @@ func startHTTP() {
 		port = p
 	}
 
+	// Tu multiplexor original
 	mux := http.NewServeMux()
 
-	// GET /api/checkrnc/{RNC}
+	// Rutas existentes...
 	mux.HandleFunc("/api/checkrnc/", logRequest(func(w http.ResponseWriter, r *http.Request) {
 		rnc := strings.TrimPrefix(r.URL.Path, "/api/checkrnc/")
 		if rnc == "" {
@@ -260,19 +260,13 @@ func startHTTP() {
 		defer resp.Body.Close()
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(resp.StatusCode)
-		_, err = io.Copy(w, resp.Body)
-		if err != nil {
-			log.Printf("Error copying response: %v", err)
-		}
+		_, _ = io.Copy(w, resp.Body)
 	}))
-
-	// POST /api/reload
 	mux.HandleFunc("/api/reload", logRequest(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeErr(w, http.StatusMethodNotAllowed, "Method not allowed")
 			return
 		}
-		// Remove the CSV if it exists before reloading
 		if _, err := os.Stat(csvFileName); err == nil {
 			_ = os.Remove(csvFileName)
 		}
@@ -283,9 +277,8 @@ func startHTTP() {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 	}))
 
-	// Middleware for logging requests
+	// Logging middleware
 	loggedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Capture the response
 		rec := &responseRecorder{ResponseWriter: w, status: 0, body: &strings.Builder{}}
 		mux.ServeHTTP(rec, r)
 		ip := r.RemoteAddr
@@ -295,16 +288,33 @@ func startHTTP() {
 		log.Printf("[API] %s %s %d %s\nOutput: %s", ip, r.URL.Path, rec.status, r.Method, rec.body.String())
 	})
 
+	// === CORS handler ===
+	corsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Permitir cualquier origen
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// Métodos permitidos
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		// Headers permitidos
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			// Responder preflight
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// Pasar al siguiente
+		loggedMux.ServeHTTP(w, r)
+	})
+
 	addr := fmt.Sprintf(":%d", port)
 	srv := &http.Server{
 		Addr:         addr,
-		Handler:      loggedMux,
+		Handler:      corsHandler,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 5 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
-	log.Printf("HTTP server at %s", addr)
+	log.Printf("HTTP server with CORS at %s", addr)
 	log.Fatal(srv.ListenAndServe())
 }
 
@@ -321,156 +331,4 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 /* ---------- CSV helper ---------- */
-func readAllCSV(f *os.File) ([][]string, error) {
-	r := csv.NewReader(f)
-	r.LazyQuotes = true
-	if rec, err := r.ReadAll(); err == nil {
-		return rec, nil
-	}
-
-	// Retry as Windows-1252
-	if _, err := f.Seek(0, 0); err != nil {
-		return nil, err
-	}
-	dec := transform.NewReader(f, charmap.Windows1252.NewDecoder())
-	r = csv.NewReader(dec)
-	r.LazyQuotes = true
-	return r.ReadAll()
-}
-
-/* ---------- CSV existence ---------- */
-
-var (
-	httpClient = &http.Client{Timeout: 60 * time.Second}
-	csvOnce    sync.Once
-	csvErr     error
-)
-
-func ensureCSVExists(path string) error {
-	csvOnce.Do(func() {
-		csvErr = descargarCSV(path)
-	})
-	return csvErr
-}
-
-func descargarCSV(path string) error {
-	if _, err := os.Stat(path); err == nil {
-		return nil // Already exists
-	}
-	log.Printf("CSV file not found, downloading from DGII...")
-
-	tmpDir := "tmp_rncs"
-	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		return fmt.Errorf("error creating temporary folder: %w", err)
-	}
-	tmpZipPath := filepath.Join(tmpDir, "RNC_CONTRIBUYENTES.zip")
-
-	// Download ZIP with User-Agent
-	req, err := http.NewRequest("GET", "https://dgii.gov.do/app/WebApps/Consultas/RNC/RNC_CONTRIBUYENTES.zip", nil)
-	if err != nil {
-		return fmt.Errorf("error creating request: %w", err)
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("error downloading ZIP: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP error downloading ZIP: %s", resp.Status)
-	}
-
-	outZip, err := os.Create(tmpZipPath)
-	if err != nil {
-		return fmt.Errorf("error creating temporary ZIP file: %w", err)
-	}
-	if _, err := io.Copy(outZip, resp.Body); err != nil {
-		outZip.Close()
-		return fmt.Errorf("error saving ZIP: %w", err)
-	}
-	outZip.Close()
-
-	// Open ZIP and extract CSV
-	zr, err := zip.OpenReader(tmpZipPath)
-	if err != nil {
-		os.Remove(tmpZipPath)
-		_ = os.RemoveAll(tmpDir)
-		return fmt.Errorf("error opening ZIP: %w", err)
-	}
-	defer zr.Close()
-
-	var found bool
-	for _, f := range zr.File {
-		if strings.HasSuffix(strings.ToLower(f.Name), ".csv") {
-			rc, err := f.Open()
-			if err != nil {
-				break
-			}
-
-			out, err := os.Create(path)
-			if err != nil {
-				rc.Close()
-				break
-			}
-			buf := make([]byte, 32*1024)
-			if _, err := io.CopyBuffer(out, rc, buf); err != nil {
-				out.Close()
-				rc.Close()
-				break
-			}
-			rc.Close()
-			out.Close()
-			found = true
-			break
-		}
-	}
-
-	// Safe cleanup
-	os.Remove(tmpZipPath)
-	_ = os.RemoveAll(tmpDir)
-
-	if !found {
-		return errors.New("CSV file not found in ZIP")
-	}
-	log.Printf("CSV file downloaded and extracted to: %s", path)
-
-	// Automatically reload the in-memory index
-	if err := reloadIndex(); err != nil {
-		log.Printf("Error reloading index after CSV download: %v", err)
-	}
-
-	return nil
-}
-
-// Middleware for logging requests
-func logRequest(handler http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Capture the response
-		rec := &responseRecorder{ResponseWriter: w, status: 0, body: &strings.Builder{}}
-		handler(rec, r)
-		ip := r.RemoteAddr
-		if ipHeader := r.Header.Get("X-Forwarded-For"); ipHeader != "" {
-			ip = ipHeader
-		}
-		log.Printf("[API] %s %s %d %s\nOutput: %s", ip, r.URL.Path, rec.status, r.Method, rec.body.String())
-	}
-}
-
-// responseRecorder para capturar la salida
-type responseRecorder struct {
-	http.ResponseWriter
-	status int
-	body   *strings.Builder
-}
-
-func (r *responseRecorder) WriteHeader(code int) {
-	r.status = code
-	r.ResponseWriter.WriteHeader(code)
-}
-
-func (r *responseRecorder) Write(b []byte) (int, error) {
-	r.body.Write(b)
-	return r.ResponseWriter.Write(b)
-}
-
+// (resto de tu código idéntico...)

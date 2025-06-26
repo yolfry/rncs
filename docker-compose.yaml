@@ -14,8 +14,8 @@ services:
     depends_on:
       - rncs-api
     entrypoint: ["/bin/sh", "-c"]
-    command: |
-      "while true; do
+    command: >
+      sh -c 'while true; do
         curl -X POST http://rncs-api:9922/api/reload;
         sleep 86400;
-      done"
+      done'
