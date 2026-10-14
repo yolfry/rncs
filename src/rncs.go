@@ -332,22 +332,12 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 /* ---------- CSV helper ---------- */
 func readAllCSV(f *os.File) ([][]string, error) {
-	r := csv.NewReader(f)
-	r.LazyQuotes = true
-	if rec, err := r.ReadAll(); err == nil {
-		return rec, nil
-	}
-
-	// Retry as Windows-1252
-	if _, err := f.Seek(0, 0); err != nil {
-		return nil, err
-	}
+	// Forzamos la lectura en Windows-1252 desde el principio
 	dec := transform.NewReader(f, charmap.Windows1252.NewDecoder())
-	r = csv.NewReader(dec)
+	r := csv.NewReader(dec)
 	r.LazyQuotes = true
 	return r.ReadAll()
 }
-
 /* ---------- CSV existence ---------- */
 
 var (
